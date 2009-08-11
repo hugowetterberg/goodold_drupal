@@ -19,7 +19,7 @@ function system_main_admin_page($arg = NULL) {
 
   // Check for status report errors.
   if (system_status(TRUE) && user_access('administer site configuration')) {
-    drupal_set_message(t('One or more problems were detected with your Drupal installation. Check the <a href="@status">status report</a> for more information.', array('@status' => url('admin/reports/status'))), 'error');
+    drupal_set_message(t('One or more problems were detected with your Pressflow installation. Check the <a href="@status">status report</a> for more information.', array('@status' => url('admin/reports/status'))), 'error');
   }
   $blocks = array();
   if ($admin = db_fetch_array(db_query("SELECT menu_name, mlid FROM {menu_links} WHERE link_path = 'admin' AND module = 'system'"))) {
@@ -625,6 +625,13 @@ function system_modules($form_state = array()) {
   // Get current list of modules.
   $files = module_rebuild_cache();
 
+  // Remove hidden modules from display list.
+  foreach ($files as $filename => $file) {
+    if (!empty($file->info['hidden'])) {
+      unset($files[$filename]);
+    }
+  }
+
   uasort($files, 'system_sort_modules_by_info_name');
 
   if (!empty($form_state['storage'])) {
@@ -1127,7 +1134,7 @@ function system_site_information_settings() {
   $form['site_name'] = array(
     '#type' => 'textfield',
     '#title' => t('Name'),
-    '#default_value' => variable_get('site_name', 'Drupal'),
+    '#default_value' => variable_get('site_name', 'Pressflow'),
     '#description' => t('The name of this website.'),
     '#required' => TRUE
   );
@@ -1285,6 +1292,13 @@ function system_performance_settings() {
     '#default_value' => variable_get('cache_lifetime', 0),
     '#options' => $period,
     '#description' => t('On high-traffic sites, it may be necessary to enforce a minimum cache lifetime. The minimum cache lifetime is the minimum amount of time that will elapse before the cache is emptied and recreated, and is applied to both page and block caches. A larger minimum cache lifetime offers better performance, but users will not see new content for a longer period of time.')
+  );
+  $form['page_cache']['page_cache_max_age'] = array(
+    '#type' => 'select',
+    '#title' => t('Page cache maximum age'),
+    '#default_value' => variable_get('page_cache_max_age', 0),
+    '#options' => $period,
+    '#description' => t('Internal and external page caches will not deliver cached paged older than this setting.')
   );
   $form['page_cache']['page_compression'] = array(
     '#type' => 'radios',
@@ -1642,7 +1656,7 @@ function system_site_maintenance_settings() {
   $form['site_offline_message'] = array(
     '#type' => 'textarea',
     '#title' => t('Site off-line message'),
-    '#default_value' => variable_get('site_offline_message', t('@site is currently under maintenance. We should be back shortly. Thank you for your patience.', array('@site' => variable_get('site_name', 'Drupal')))),
+    '#default_value' => variable_get('site_offline_message', t('@site is currently under maintenance. We should be back shortly. Thank you for your patience.', array('@site' => variable_get('site_name', 'Pressflow')))),
     '#description' => t('Message to show visitors when the site is in off-line mode.')
   );
 
