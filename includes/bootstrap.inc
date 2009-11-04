@@ -1,5 +1,5 @@
 <?php
-// $Id: bootstrap.inc,v 1.206.2.11 2009/02/25 13:49:54 dries Exp $
+// $Id: bootstrap.inc,v 1.206.2.13 2009/09/14 13:33:39 goba Exp $
 
 /**
  * @file
@@ -500,6 +500,8 @@ function variable_init($conf = array()) {
  *   The default value to use if this variable has never been set.
  * @return
  *   The value of the variable.
+ *
+ * @see variable_del(), variable_set()
  */
 function variable_get($name, $default) {
   global $conf;
@@ -515,6 +517,8 @@ function variable_get($name, $default) {
  * @param $value
  *   The value to set. This can be any PHP data type; these functions take care
  *   of serialization as necessary.
+ *
+ * @see variable_del(), variable_get()
  */
 function variable_set($name, $value) {
   global $conf;
@@ -535,6 +539,8 @@ function variable_set($name, $value) {
  *
  * @param $name
  *   The name of the variable to undefine.
+ *
+ * @see variable_get(), variable_set()
  */
 function variable_del($name) {
   global $conf;
@@ -585,7 +591,7 @@ function drupal_page_is_cacheable($force = NULL) {
     && !drupal_session_started()
     && ($_SERVER['REQUEST_METHOD'] == 'GET' || $_SERVER['REQUEST_METHOD'] == 'HEAD')
     && !count(drupal_get_messages(NULL, FALSE))
-    && $_SERVER['SERVER_SOFTWARE'] !== 'PHP CLI';
+    && !drupal_is_cli();
 
   return $result;
 }
@@ -1205,7 +1211,7 @@ function drupal_bootstrap($phase) {
 }
 
 function _drupal_bootstrap($phase) {
-  global $conf, $user;
+  global $conf, $user, $db_prefix;
 
   switch ($phase) {
 
@@ -1231,6 +1237,18 @@ function _drupal_bootstrap($phase) {
       break;
 
     case DRUPAL_BOOTSTRAP_DATABASE:
+      // The user agent header is used to pass a database prefix in the request when
+      // running tests. However, for security reasons, it is imperative that we
+      // validate we ourselves made the request.
+      $GLOBALS['simpletest_installed'] = TRUE;
+      if (isset($_SERVER['HTTP_USER_AGENT']) && (strpos($_SERVER['HTTP_USER_AGENT'], "simpletest") !== FALSE) && !drupal_valid_test_ua($_SERVER['HTTP_USER_AGENT'])) {
+        header($_SERVER['SERVER_PROTOCOL'] . ' 403 Forbidden');
+        exit;
+      }
+      if (isset($_SERVER['HTTP_USER_AGENT']) && preg_match("/^(simpletest\d+);/", $_SERVER['HTTP_USER_AGENT'], $matches)) {
+        $db_prefix .= $matches[1];
+      }
+
       // Initialize the default database.
       require_once './includes/database.inc';
       db_set_active();
@@ -1287,8 +1305,10 @@ function _drupal_bootstrap($phase) {
       }
 
       // Prepare for non-cached page workflow.
-      ob_start();
-      drupal_page_header();
+      if (!drupal_is_cli()) {
+        ob_start();
+        drupal_page_header();
+      }
       break;
 
     case DRUPAL_BOOTSTRAP_LANGUAGE:
@@ -1521,7 +1541,13 @@ function drupal_session_regenerate() {
   // Set the session cookie "httponly" flag to reduce the risk of session
   // stealing via XSS.
   extract(session_get_cookie_params());
-  session_set_cookie_params($lifetime, $path, $domain, $secure, TRUE);
+
+  if (version_compare(PHP_VERSION, '5.2.0') === 1) {
+    session_set_cookie_params($lifetime, $path, $domain, $secure, TRUE);
+  }
+  else {
+    session_set_cookie_params($lifetime, $path, $domain, $secure);
+  }
 
   if (drupal_session_started()) {
     $old_session_id = session_id();
@@ -1537,7 +1563,7 @@ function drupal_session_regenerate() {
   }
 
   if (isset($old_session_id)) {
-    db_query('UPDATE {sessions} SET sid = "%s" WHERE sid = "%s"', session_id(), $old_session_id);
+    db_query("UPDATE {sessions} SET sid = '%s' WHERE sid = '%s'", session_id(), $old_session_id);
   }
 }
 
@@ -1561,4 +1587,50 @@ function drupal_save_session($status = NULL) {
     $save_session = $status;
   }
   return $save_session;
+}
+
+/**
+ * Validate the HMAC and timestamp of a user agent header from simpletest.
+ */
+function drupal_valid_test_ua($user_agent) {
+  global $db_url;
+
+  list($prefix, $time, $salt, $hmac) = explode(';', $user_agent);
+  $check_string =  $prefix . ';' . $time . ';' . $salt;
+  // We use the database credentials from settings.php to make the HMAC key, since
+  // the database is not yet initialized and we can't access any Drupal variables.
+  // The file properties add more entropy not easily accessible to others.
+  $filepath = './includes/bootstrap.inc';
+  $key = sha1(serialize($db_url) . filectime($filepath) . fileinode($filepath), TRUE);
+  // The HMAC must match.
+  return $hmac == base64_encode(hash_hmac('sha1', $check_string, $key, TRUE));
+}
+
+/**
+ * Generate a user agent string with a HMAC and timestamp for simpletest.
+ */
+function drupal_generate_test_ua($prefix) {
+//  global $dbatabases;
+  global $db_url;
+  static $key;
+
+  if (!isset($key)) {
+    // We use the database credentials to make the HMAC key, since we
+    // check the HMAC before the database is initialized. filectime()
+    // and fileinode() are not easily determined from remote.
+    $filepath = './includes/bootstrap.inc';
+    $key = sha1(serialize($db_url) . filectime($filepath) . fileinode($filepath), TRUE);
+  }
+   // Generate a moderately secure HMAC based on the database credentials.
+   $salt = uniqid('', TRUE);
+   $check_string = $prefix . ';' . time() . ';' . $salt;
+   return  $check_string . ';' . base64_encode(hash_hmac('sha1', $check_string, $key, TRUE));
+}
+
+/**
+ * Detect whether the current script is running in a command-line environment.
+ */
+function drupal_is_cli() {
+  return ((!isset($_SERVER['SERVER_SOFTWARE']) || $_SERVER['SERVER_SOFTWARE'] == 'PHP CLI')
+    && (php_sapi_name() == 'cli' || (is_numeric($_SERVER['argc']) && $_SERVER['argc'] > 0)));
 }
